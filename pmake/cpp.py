@@ -1,3 +1,6 @@
+from pathlib import Path
+from inspect import isgenerator
+
 def _wrap_list(arg):
     if arg is None:
         return []
@@ -5,6 +8,10 @@ def _wrap_list(arg):
         return arg
     if isinstance(arg, tuple):
         return list(arg)
+    if isinstance(arg, Path):
+        return [str(arg)]
+    if isgenerator(arg):
+        return list(map(str, arg))
     return [arg]
 
 class _Target:
@@ -43,11 +50,13 @@ class _Target:
             raise Exception(f'Unknown target type: {self.type}')
         rv += self._cmake_cmd_list('target_sources', self._sources)
         rv += self._cmake_cmd_list('target_include_directories', self._includes)
+        rv += f'\ntarget_include_directories({self.name} PUBLIC ${{CONAN_INCLUDE_DIRS}})'
         rv += self._cmake_cmd_list('target_link_libraries', self._libraries)
+        rv += f'\ntarget_link_libraries({self.name} ${{CONAN_LIB_DIRS}})'
         rv += self._cmake_cmd_list('target_compile_options', self._options)
         rv += self._cmake_cmd_list('target_link_directories', self._library_paths)
         rv += self._cmake_cmd_list('target_compile_definitions', self._defines)
-        rv += self._cmake_cmd_dict('set_target_properties', self._properties)
+        rv += self._cmake_cmd_dict('set_target_properties', self._properties, 'PROPERTIES')
         rv += '\n'
         return rv
     
@@ -74,13 +83,15 @@ class _Target:
         rv = f'\n{cmd}({self.name} {public_str} {lst_str})'
         return rv
     
-    def _cmake_cmd_dict(self, cmd, dct, public=True):
+    def _cmake_cmd_dict(self, cmd, dct, keyword=''):
         if len(dct) == 0:
             return ''
-        public_str = 'PUBLIC' if public else 'PRIVATE'
         rv = ''
         for key, value in dct.items():
-            rv += f'\n{cmd}({self.name} {public_str} {key} {value})'
+            key = key.upper()
+            value = str(value)
+
+            rv += f'\n{cmd}({self.name} {keyword} {key} {value})'
         return rv
 
 def shared_library(*args, **kwargs):

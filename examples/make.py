@@ -1,17 +1,4 @@
-# pmake
-
-Generate cmake files from python. Use conan to install dependencies.
-
-## Example
-
-```sh
-pip install -e .
-```
-
-Example python makescript
-
-```python
-from pmake import project, fetch_contents
+from pmake import project
 import pmake.cpp as cpp
 
 hello_project = project('hello')
@@ -25,8 +12,12 @@ hello.includes('/usr/include')
 hello.defines('TEST')
 hello.library_paths('/usr/lib')
 hello_project += hello
-```
 
-```sh
-python make.py --mode=release
-```
+hello_project += cpp.shared_library('test', sources='test.cpp')
+
+hello_project += cpp.static_library('testa', sources='test.cpp')
+
+hello_project.write()
+hello_project.configure()
+hello_project.build()
+hello_project.install()

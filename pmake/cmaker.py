@@ -1,48 +1,54 @@
 import os
-import sys
 import argparse
 from pathlib import Path
 from textwrap import dedent
 import requests
 import zipfile
 
-import cpp
-
-def _execute_makescript(path):
-    path = Path(path)
-    if path.is_dir():
-        path = path / 'make.py'
-    elif path.is_file():
-        pass
-    else:
-        raise FileNotFoundError(path)
-
-    contents = path.read_text()
-    ARGS = _parse_args()
-    exec(contents, globals(), locals())
-    for key, value in locals().items():
-        if isinstance(value, project):
-            return value
+def _make_folder(path, extra):
+    if len(extra) == 0:
+        return path
+    bf = Path(extra)
+    if bf.is_absolute() and not bf.exists():
+        bf.mkdir(parents=True)
+    elif not bf.is_absolute():
+        bf = path.parent / bf
+        if not bf.exists():
+            bf.mkdir(parents=True)
+    return bf
 
 def _parse_args(args=None):
     parser = argparse.ArgumentParser()
-    parser.add_argument('path', type=str)
+    parser.add_argument('--path', type=str, default='.')
     parser.add_argument('--write', '-w', action='store_true')
     parser.add_argument('--configure', '-c', action='store_true')
     parser.add_argument('--build', '-b', action='store_true')
     parser.add_argument('--install', '-i', action='store_true')
     parser.add_argument('--mode', type=str, default='debug')
     parser.add_argument('--build-folder', '-bf', type=str, default='build')
-    parser.add_argument('--install-folder', '-if', type=str, default='install')
+    parser.add_argument('--install-folder', '-if', type=str, default='')
     parser.add_argument('--clean', action='store_true')
     parser.add_argument('--jobs', '-j', type=int, default=1)
     parser.add_argument('--verbose', '-v', action='store_true')
-    args = parser.parse_known_args(args)[0]
-    return args
+    args, unknown = parser.parse_known_args(args)
+
+    path = Path(args.path)
+    if path.is_dir():
+        path = path / 'make.py'
+    elif path.is_file():
+        pass
+    else:
+        raise FileNotFoundError(path)
+    args.path = path
+    args.source_folder = path.parent
+    args.build_folder = _make_folder(path, args.build_folder)
+    args.install_folder = _make_folder(path, args.install_folder)
+
+    return args, unknown
 
 class project:
 
-    def __init__(self, name, version='3.10'):
+    def __init__(self, name, version='3.10', extra_args_parser=None):
         self.name = name
         self._version = version
         self.rpath = ''
@@ -50,8 +56,18 @@ class project:
         self._conans = {}
         self._pkgs = {}
         self._prefixes = []
-        self._args = _parse_args()
+        self._args, extra = _parse_args()
+        if extra_args_parser:
+            self._extra_args = extra_args_parser.parse_known_args(extra)[0]
         self._targets = []
+
+    @property
+    def args(self):
+        return self._args
+    
+    @property
+    def extra_args(self):
+        return self._extra_args
 
     def version(self, version):
         self._version = version
@@ -81,7 +97,7 @@ class project:
         if cpp:
             self._vars['CMAKE_CXX_COMPILER'] = cpp
 
-    def _write(self):
+    def write(self):
         cmake = f'cmake_minimum_required(VERSION {self._version})\nproject({self.name})\n'
         if self.rpath:
             cmake += f'set(CMAKE_INSTALL_RPATH "{self.rpath}")\n'
@@ -117,19 +133,21 @@ class project:
         if self._args.verbose:
             print(cmake)
 
-        with open('CMakeLists.txt', 'w') as f:
+        path = self._args.source_folder / 'CMakeLists.txt'
+        with open(path, 'w') as f:
             f.write(cmake)
+        print(f'Wrote {path}')
 
-    def _configure(self):
-        build_folder = Path(self._args.build_folder)
-        build_folder.mkdir(parents=True, exist_ok=True)
-        configure_cmd = f'cmake -S {self._args.path} -B {build_folder} -DCMAKE_INSTALL_PREFIX={self._args.install_folder} -DCMAKE_BUILD_TYPE={self._args.mode}'
+    def configure(self):
+        configure_cmd = f'cmake -S {self._args.source_folder} -B {self._args.build_folder} -DCMAKE_BUILD_TYPE={self._args.mode}'
+        if self._args.install_folder:
+            configure_cmd += f' -DCMAKE_INSTALL_PREFIX={self._args.install_folder}'
         if self._args.verbose:
-            configure_cmd += ' --verbose'
+            # configure_cmd += ' --verbose'
             print(configure_cmd)
         os.system(configure_cmd)
 
-    def _build(self):
+    def build(self):
         build_cmd = f'cmake --build {self._args.build_folder} --config {self._args.mode} -j {self._args.jobs}'
         if self._args.verbose:
             build_cmd += ' --verbose'
@@ -139,7 +157,7 @@ class project:
             print(build_cmd)
         os.system(build_cmd)
 
-    def _install(self):
+    def install(self):
         install_cmd = f'cmake --install {self._args.build_folder} --config {self._args.mode}'
         if self._args.verbose:
             install_cmd += ' --verbose'
@@ -157,18 +175,27 @@ def download(url, filename):
             if chunk:
                 f.write(chunk)
 
-def unzip(filename, folder='.'):
+def unzip(filename, extract_path):
     with zipfile.ZipFile(filename, 'r') as zip_ref:
-        zip_ref.extractall(folder)
+        zip_ref.extractall(extract_path)
 
-if __name__ == '__main__':
-    p = _execute_makescript(sys.argv[1])
-    if p:
-        if p._args.write:
-            p._write()
-        if p._args.configure:
-            p._configure()
-        if p._args.build:
-            p._build()
-        if p._args.install:
-            p._install()
+def fetch_contents(url, download_path, always_download=False, check_path=None, do_unzip=False, extract_path=None, remove_zip=True):
+    if not check_path:
+        check_path = download_path
+    if always_download or not check_path.exists():
+        print(f'Downloading {url} to {download_path}')
+        download(url, download_path)
+        
+    if check_path.exists():
+        print(f'Found {check_path}')
+        return
+
+    if do_unzip:
+        print(f'Unzipping {download_path}')
+        if not extract_path:
+            extract_path = download_path
+        unzip(download_path, extract_path)
+
+        if remove_zip:
+            print(f'Removing {download_path}')
+            download_path.unlink()
