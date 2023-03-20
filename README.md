@@ -11,7 +11,7 @@ pip install -e .
 Example python makescript
 
 ```python
-from pmake import project, fetch_contents
+from pmake import project
 import pmake.cpp as cpp
 
 hello_project = project('hello')
@@ -25,6 +25,11 @@ hello.includes('/usr/include')
 hello.defines('TEST')
 hello.library_paths('/usr/lib')
 hello_project += hello
+
+hello_project.write()
+hello_project.configure()
+hello_project.build()
+hello_project.install()
 ```
 
 ```sh
